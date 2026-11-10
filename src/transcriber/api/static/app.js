@@ -326,11 +326,13 @@ function highlight(currentTime) {
   for (const { data, element } of state.segments.values()) {
     const active = currentTime >= data.start && currentTime < data.end;
     element.classList.toggle("active", active);
-    if (active && data.words) {
-      element.querySelectorAll(".word").forEach((w) => {
-        w.classList.toggle("active", currentTime >= +w.dataset.start && currentTime < +w.dataset.end);
-      });
-    }
+    if (!data.words) continue;
+    // Update every segment, not only the active one: otherwise the last word highlighted in a
+    // segment stays highlighted after playback moves on (or the user seeks elsewhere).
+    element.querySelectorAll(".word").forEach((w) => {
+      const playing = active && currentTime >= +w.dataset.start && currentTime < +w.dataset.end;
+      w.classList.toggle("active", playing);
+    });
   }
 }
 
