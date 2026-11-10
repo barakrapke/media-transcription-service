@@ -31,6 +31,9 @@ const state = {
   events: null,
   pollTimer: null,
   segments: new Map(), // id -> { data, element }
+  attempt: null,
+  activeSegment: null, // currently highlighted { data, element }
+  activeWord: null, // currently highlighted word <span>
 };
 
 // ---- Helpers -------------------------------------------------------------------------------------
@@ -223,9 +226,8 @@ function reattachMedia(file) {
 function resetJobView() {
   closeStream();
   if (state.mediaUrl) URL.revokeObjectURL(state.mediaUrl);
-  Object.assign(state, { mediaUrl: null, media: null, jobId: null, status: null });
-  state.segments.clear();
-  $("transcript").replaceChildren();
+  Object.assign(state, { mediaUrl: null, media: null, jobId: null, status: null, attempt: null });
+  clearTranscript();
   $("player-wrap").replaceChildren();
   show($("player-wrap"), false);
   show($("player-missing"), false);
@@ -237,17 +239,26 @@ function resetJobView() {
 }
 
 function applyJob(job) {
-  setStatus(job.status);
+  setStatus(job.status, job.attempts);
   setProgress(job.progress);
   if (job.status === "completed" && job.result) finish(job);
   if (job.status === "failed" && job.error) fail(job.error);
 }
 
-function setStatus(status) {
-  if (status === "queued" && state.status === "processing") {
-    // The job was re-queued after its worker was lost; segments will be produced again.
-    state.segments.clear();
-    $("transcript").replaceChildren();
+function clearTranscript() {
+  state.segments.clear();
+  state.activeSegment = null;
+  state.activeWord = null;
+  $("transcript").replaceChildren();
+}
+
+function setStatus(status, attempt) {
+  if (attempt != null) {
+    if (state.attempt != null && attempt !== state.attempt) {
+      // The job is being re-run after its worker was lost; segments are produced again.
+      clearTranscript();
+    }
+    state.attempt = attempt;
   }
   state.status = status;
   const badge = $("job-badge");
@@ -323,23 +334,41 @@ function seek(seconds) {
 }
 
 function highlight(currentTime) {
-  for (const { data, element } of state.segments.values()) {
-    const active = currentTime >= data.start && currentTime < data.end;
-    element.classList.toggle("active", active);
-    if (!data.words) continue;
-    // Update every segment, not only the active one: otherwise the last word highlighted in a
-    // segment stays highlighted after playback moves on (or the user seeks elsewhere).
-    element.querySelectorAll(".word").forEach((w) => {
-      const playing = active && currentTime >= +w.dataset.start && currentTime < +w.dataset.end;
-      w.classList.toggle("active", playing);
-    });
+  // Called ~4×/s during playback: find the active segment/word, but touch the DOM only when they
+  // change, so the cost doesn't grow with the length of the transcript.
+  let segment = null;
+  for (const entry of state.segments.values()) {
+    if (currentTime >= entry.data.start && currentTime < entry.data.end) {
+      segment = entry;
+      break;
+    }
+  }
+  if (segment !== state.activeSegment) {
+    state.activeSegment?.element.classList.remove("active");
+    segment?.element.classList.add("active");
+    state.activeSegment = segment;
+  }
+
+  let word = null;
+  if (segment?.data.words) {
+    for (const span of segment.element.querySelectorAll(".word")) {
+      if (currentTime >= +span.dataset.start && currentTime < +span.dataset.end) {
+        word = span;
+        break;
+      }
+    }
+  }
+  if (word !== state.activeWord) {
+    state.activeWord?.classList.remove("active");
+    word?.classList.add("active");
+    state.activeWord = word;
   }
 }
 
 function finish(job) {
   const result = job.result;
   closeStream();
-  setStatus("completed");
+  setStatus("completed", job.attempts);
   setProgress(1);
   show($("job-progress"), false);
   result.segments.forEach(addSegment);
@@ -410,7 +439,7 @@ function subscribe() {
   state.events = events;
   const data = (e) => JSON.parse(e.data);
 
-  events.addEventListener("status", (e) => setStatus(data(e).status));
+  events.addEventListener("status", (e) => setStatus(data(e).status, data(e).attempt));
   events.addEventListener("progress", (e) => setProgress(data(e).progress));
   events.addEventListener("segment", (e) => addSegment(data(e)));
   events.addEventListener("completed", (e) => finish(data(e)));
