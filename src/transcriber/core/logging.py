@@ -71,5 +71,5 @@ def configure_logging(level: str = "INFO", fmt: str = "text") -> None:
         uvicorn_logger.handlers.clear()
         uvicorn_logger.propagate = True
     # Third-party chatter that is not useful at INFO.
-    for name in ("faster_whisper", "httpx", "huggingface_hub"):
+    for name in ("faster_whisper", "httpx", "httpx2", "huggingface_hub"):
         logging.getLogger(name).setLevel(max(logging.WARNING, root.level))
