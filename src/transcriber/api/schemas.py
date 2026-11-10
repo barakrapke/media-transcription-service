@@ -26,6 +26,9 @@ class JobResponse(BaseModel):
     filename: str
     language: str | None = Field(description="Requested language; null means auto-detect.")
     word_timestamps: bool
+    attempts: int = Field(
+        description="Processing attempts so far (a job is retried if its worker dies)."
+    )
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
@@ -44,6 +47,7 @@ class JobResponse(BaseModel):
             filename=job.filename,
             language=job.language,
             word_timestamps=job.word_timestamps,
+            attempts=job.attempts,
             created_at=job.created_at,
             started_at=job.started_at,
             completed_at=job.completed_at,

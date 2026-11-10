@@ -113,6 +113,7 @@ class FakeTranscriber:
     calls: list[dict[str, object]] = field(default_factory=list)
     model_name: str = "fake-model"
     started: threading.Event = field(default_factory=threading.Event)
+    finished: threading.Event = field(default_factory=threading.Event)
 
     def transcribe(
         self,
@@ -132,10 +133,13 @@ class FakeTranscriber:
         )
 
         def generate() -> Iterator[Segment]:
-            for segment in self.segments:
-                if self.delay_per_segment:
-                    time.sleep(self.delay_per_segment)
-                yield segment
+            try:
+                for segment in self.segments:
+                    if self.delay_per_segment:
+                        time.sleep(self.delay_per_segment)
+                    yield segment
+            finally:
+                self.finished.set()
 
         return info, generate()
 

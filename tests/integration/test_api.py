@@ -58,6 +58,7 @@ async def test_upload_creates_queued_job(
     assert body["filename"] == "with_audio.mp4"
     assert body["language"] == "en"
     assert body["word_timestamps"] is True
+    assert body["attempts"] == 0
     assert body["result"] is None
     assert await store.queue_length() == 1
     assert storage.path_for(body["id"]).exists()
@@ -212,6 +213,35 @@ async def test_delete_processing_job_cancels_it(
     assert response.status_code == 202
     job = await store.get(job_id)
     assert job is not None and job.status is JobStatus.CANCELLED
+
+
+async def test_cancel_racing_completion_keeps_the_result(
+    client: httpx.AsyncClient, store: JobStore, media: MediaFiles,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:  # fmt: skip
+    """The job completes between reading it and cancelling it: report it, never delete it."""
+    from transcriber.jobs.models import TranscriptionSummary
+
+    job_id = (await upload(client, media.tone)).json()["id"]
+    await store.claim(timeout=1, heartbeat_ttl=5)
+    attempt = await store.start(job_id)
+    assert attempt is not None
+    real_cancel = JobStore.cancel
+    summary = TranscriptionSummary(
+        text="done", language="en", language_probability=1, duration=1, model="m",
+        processing_time=1,
+    )  # fmt: skip
+
+    async def cancel_after_completion(self: JobStore, job_id: str) -> bool:
+        await self.complete(job_id, attempt, summary)  # the worker wins the race
+        return await real_cancel(self, job_id)
+
+    # Patched on the class: the app has its own JobStore instance (same Redis).
+    monkeypatch.setattr(JobStore, "cancel", cancel_after_completion)
+    response = await client.delete(f"{API}/{job_id}")
+    assert response.status_code == 202
+    assert response.json()["status"] == "completed"
+    assert (await client.get(f"{API}/{job_id}")).json()["result"]["text"] == "done"
 
 
 async def test_delete_completed_job(client: httpx.AsyncClient, completed_job: str) -> None:

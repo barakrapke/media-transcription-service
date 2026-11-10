@@ -17,8 +17,15 @@ logger = logging.getLogger(__name__)
 SAMPLE_RATE = 16_000
 
 
-async def decode_to_wav(source: Path, target: Path, timeout: float) -> None:
-    """Decode any audio/video file to a 16 kHz mono 16-bit WAV (multi-channel is downmixed)."""
+async def decode_to_wav(
+    source: Path, target: Path, timeout: float, max_seconds: float | None = None
+) -> None:
+    """Decode any audio/video file to a 16 kHz mono 16-bit WAV (multi-channel is downmixed).
+
+    With ``max_seconds``, decoding stops just past that length, so an over-long file can be
+    detected from the output without decoding (and storing) all of it.
+    """
+    limit = ["-t", str(max_seconds + 1)] if max_seconds is not None else []
     process = await asyncio.create_subprocess_exec(
         "ffmpeg",
         "-nostdin",
@@ -26,6 +33,7 @@ async def decode_to_wav(source: Path, target: Path, timeout: float) -> None:
         "-v", "error",
         "-i", str(source),
         "-vn", "-sn", "-dn",
+        *limit,
         "-ac", "1",
         "-ar", str(SAMPLE_RATE),
         "-c:a", "pcm_s16le",
@@ -45,6 +53,11 @@ async def decode_to_wav(source: Path, target: Path, timeout: float) -> None:
         detail = stderr.decode(errors="replace").strip().splitlines()
         logger.warning("ffmpeg failed (exit %s): %s", process.returncode, detail[-3:])
         raise DecodeError()
+
+
+def wav_duration(path: Path) -> float:
+    with wave.open(str(path), "rb") as wav:
+        return wav.getnframes() / wav.getframerate()
 
 
 def load_wav(path: Path) -> npt.NDArray[np.float32]:

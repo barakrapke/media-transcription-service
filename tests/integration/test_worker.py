@@ -98,7 +98,7 @@ async def test_model_error_fails_job(
     assert "CUDA" not in job.error.message  # internals are not leaked to clients
 
 
-async def test_job_timeout(
+async def test_job_timeout_waits_for_the_model_before_returning(
     store: JobStore, storage: UploadStorage, transcriber: FakeTranscriber,
     settings: Settings, media: MediaFiles,
 ) -> None:  # fmt: skip
@@ -111,6 +111,24 @@ async def test_job_timeout(
     job = await store.get(job_id)
     assert job is not None and job.error is not None
     assert job.error.code == ErrorCode.JOB_TIMEOUT
+    # The next job must never run on the shared model while this one is still inferring.
+    assert transcriber.finished.is_set()
+
+
+async def test_media_longer_than_limit_is_rejected_after_decoding(
+    store: JobStore, storage: UploadStorage, transcriber: FakeTranscriber,
+    settings: Settings, media: MediaFiles,
+) -> None:  # fmt: skip
+    """ffprobe can't always tell the duration (e.g. browser-recorded WebM); decoding can."""
+    processor = JobProcessor(
+        store, storage, transcriber, settings.model_copy(update={"max_duration_seconds": 1})
+    )
+    job_id = await enqueue(store, storage, media.tone)  # 2 s
+    await processor.process(await claim(store))
+    job = await store.get(job_id)
+    assert job is not None and job.error is not None
+    assert job.error.code == ErrorCode.DURATION_TOO_LONG
+    assert transcriber.calls == []
 
 
 async def test_cancel_while_processing(
@@ -146,20 +164,63 @@ async def test_skips_cancelled_or_deleted_jobs(
     assert await store.redis.llen("queue:processing") == 0
 
 
-async def test_requeued_job_keeps_upload(
+async def test_worker_presumed_dead_stops_writing_after_takeover(
     processor: JobProcessor, store: JobStore, storage: UploadStorage,
     transcriber: FakeTranscriber, media: MediaFiles,
 ) -> None:  # fmt: skip
-    """If the job is handed to another worker mid-flight, this worker must not delete the file."""
-    transcriber.segments = [Segment(id=i, start=i, end=i + 1, text="x") for i in range(50)]
+    """Worker A stalls, the job is re-queued and started by worker B. A must stop without
+    writing into B's run and without deleting the upload B needs."""
+    transcriber.segments = [Segment(id=i, start=i, end=i + 1, text="A") for i in range(50)]
     transcriber.delay_per_segment = 0.02
     job_id = await enqueue(store, storage, media.tone)
     task = asyncio.create_task(processor.process(await claim(store)))
     while not await store.get_segments(job_id):
         await asyncio.sleep(0.01)
-    await store.redis.hset(job_key(job_id), "status", "queued")  # recovered by a sweeper
+    # The sweeper re-queues the job and worker B immediately starts attempt 2.
+    await store.redis.hset(job_key(job_id), "status", "queued")
+    await store.redis.delete(f"job:{job_id}:segments")
+    assert await store.start(job_id) == 2
     await asyncio.wait_for(task, timeout=5)
+
+    job = await store.get(job_id)
+    assert job is not None
+    assert (job.status, job.attempts, job.summary) == (JobStatus.PROCESSING, 2, None)
+    assert await store.get_segments(job_id) == []  # nothing from attempt 1 leaked in
     assert storage.path_for(job_id).exists()
+
+
+async def test_redis_failure_mid_job_keeps_worker_and_upload(
+    processor: JobProcessor, store: JobStore, storage: UploadStorage,
+    media: MediaFiles, monkeypatch: pytest.MonkeyPatch,
+) -> None:  # fmt: skip
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    async def broken(*args: object, **kwargs: object) -> bool:
+        raise RedisConnectionError("connection reset")
+
+    job_id = await enqueue(store, storage, media.tone)
+    monkeypatch.setattr(store, "append_segment", broken)
+    await processor.process(await claim(store))  # must not raise
+
+    job = await store.get(job_id)
+    assert job is not None and job.status is JobStatus.PROCESSING  # left for the sweeper
+    assert storage.path_for(job_id).exists()  # needed by the retry
+
+
+async def test_worker_survives_redis_errors(
+    store: JobStore, storage: UploadStorage, transcriber: FakeTranscriber,
+    settings: Settings, monkeypatch: pytest.MonkeyPatch,
+) -> None:  # fmt: skip
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    worker = Worker(store, storage, transcriber, settings)
+
+    async def broken(job_id: str) -> None:
+        raise RedisConnectionError("connection reset")
+
+    monkeypatch.setattr(worker._processor, "process", broken)
+    monkeypatch.setattr("transcriber.worker.main._RETRY_DELAY_SECONDS", 0)
+    await worker._process_with_heartbeat("0" * 32)  # must not raise
 
 
 async def test_worker_loop_processes_and_stops(
@@ -196,6 +257,7 @@ async def test_sweep_recovers_jobs_and_removes_stale_uploads(
     await store.redis.delete(f"job:{orphan}:heartbeat")
     await store.redis.hset(job_key(orphan), "claimed_at", "0")
     shutil.copy(media.tone, storage.path_for("deadbeef"))  # upload with no job
+    (settings.upload_dir / ".DS_Store").write_bytes(b"")  # stray file must not break the sweep
 
     await worker.sweep()
 

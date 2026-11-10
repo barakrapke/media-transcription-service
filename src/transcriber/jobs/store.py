@@ -12,6 +12,10 @@ Key layout (see docs/ARCHITECTURE.md):
 All state transitions run as Lua scripts so that "check current status, then write" is atomic.
 Terminal states are immutable: a write from a stale worker after cancellation or recovery is
 rejected instead of silently overwriting the job.
+
+Worker writes are additionally *fenced* by the attempt number returned from ``start``: if a worker
+was presumed dead and its job was handed to another worker, the first worker's late writes carry
+an outdated attempt and are rejected, so results of two runs can never be mixed.
 """
 
 from __future__ import annotations
@@ -61,21 +65,25 @@ return 1
 """
 
 # KEYS: job, segments, heartbeat, processing.
-# ARGV: to_status, ttl_seconds, job_id, n_allowed, allowed..., then field/value pairs.
-# Moves the job to ``to_status`` only if its current status is one of the allowed ones.
-# Entering a terminal status also expires the job, drops the heartbeat and acks the queue.
+# ARGV: to_status, ttl_seconds, job_id, attempt ('' = any), n_allowed, allowed..., field/values.
+# Moves the job to ``to_status`` only if its current status is one of the allowed ones (and, for
+# worker writes, the attempt still matches). Entering ``processing`` increments the attempt and
+# returns it; entering a terminal status also expires the job, drops the heartbeat and acks the
+# queue. Returns 0 when the transition is rejected.
 _TRANSITION = """
 local status = redis.call('HGET', KEYS[1], 'status')
 if not status then return 0 end
-local n_allowed = tonumber(ARGV[4])
+if ARGV[4] ~= '' and redis.call('HGET', KEYS[1], 'attempts') ~= ARGV[4] then return 0 end
+local n_allowed = tonumber(ARGV[5])
 local ok = false
 for i = 1, n_allowed do
-  if status == ARGV[4 + i] then ok = true end
+  if status == ARGV[5 + i] then ok = true end
 end
 if not ok then return 0 end
 redis.call('HSET', KEYS[1], 'status', ARGV[1])
-if ARGV[1] == 'processing' then redis.call('HINCRBY', KEYS[1], 'attempts', 1) end
-local first_field = 5 + n_allowed
+local result = 1
+if ARGV[1] == 'processing' then result = redis.call('HINCRBY', KEYS[1], 'attempts', 1) end
+local first_field = 6 + n_allowed
 if #ARGV >= first_field then
   redis.call('HSET', KEYS[1], unpack(ARGV, first_field))
 end
@@ -86,7 +94,7 @@ if ARGV[1] == 'completed' or ARGV[1] == 'failed' or ARGV[1] == 'cancelled' then
   redis.call('DEL', KEYS[3])
   redis.call('LREM', KEYS[4], 0, ARGV[3])
 end
-return 1
+return result
 """
 
 # KEYS: job, heartbeat.  ARGV: now, heartbeat_ttl_ms.
@@ -99,11 +107,12 @@ end
 return 1
 """
 
-# KEYS: job, segments.  ARGV: segment_json, progress.
-# Appends only while the job is still processing; returns 0 once it was cancelled/recovered,
-# which tells the worker to stop.
+# KEYS: job, segments.  ARGV: segment_json, progress, attempt.
+# Appends only while the job is still processing *this* attempt; returns 0 once it was cancelled
+# or handed to another worker, which tells the worker to stop.
 _APPEND_SEGMENT = """
 if redis.call('HGET', KEYS[1], 'status') ~= 'processing' then return 0 end
+if redis.call('HGET', KEYS[1], 'attempts') ~= ARGV[3] then return 0 end
 redis.call('RPUSH', KEYS[2], ARGV[1])
 redis.call('HSET', KEYS[1], 'progress', ARGV[2])
 return 1
@@ -266,52 +275,79 @@ class JobStore:
     # ---- Transitions -----------------------------------------------------------------------
 
     async def _transition(
-        self, job_id: str, to: JobStatus, allowed: tuple[JobStatus, ...], **fields: Any
-    ) -> bool:
+        self,
+        job_id: str,
+        to: JobStatus,
+        allowed: tuple[JobStatus, ...],
+        *,
+        attempt: int | None = None,
+        **fields: Any,
+    ) -> int:
         result = await self._transition_script(
             keys=[job_key(job_id), segments_key(job_id), heartbeat_key(job_id), PROCESSING_QUEUE],
-            args=[to.value, self._ttl, job_id, len(allowed), *allowed, *_fields(**fields)],
+            args=[
+                to.value,
+                self._ttl,
+                job_id,
+                "" if attempt is None else attempt,
+                len(allowed),
+                *allowed,
+                *_fields(**fields),
+            ],
         )
-        return bool(result)
+        return int(result)
 
-    async def start(self, job_id: str) -> bool:
-        """queued -> processing. Increments the attempt counter (inside the transition script)."""
-        return await self._transition(
+    async def start(self, job_id: str) -> int | None:
+        """queued -> processing. Returns the new attempt number (the fencing token every later
+        worker write must present), or None if the job is no longer queued."""
+        attempt = await self._transition(
             job_id, JobStatus.PROCESSING, (JobStatus.QUEUED,), started_at=utc_now(), progress=0
         )
+        return attempt or None
 
-    async def append_segment(self, job_id: str, segment: Segment, progress: float) -> bool:
+    async def append_segment(
+        self, job_id: str, attempt: int, segment: Segment, progress: float
+    ) -> bool:
         result = await self._append_script(
             keys=[job_key(job_id), segments_key(job_id)],
-            args=[segment.model_dump_json(), f"{progress:.4f}"],
+            args=[segment.model_dump_json(), f"{progress:.4f}", attempt],
         )
         return bool(result)
 
-    async def complete(self, job_id: str, summary: TranscriptionSummary) -> bool:
-        return await self._transition(
-            job_id,
-            JobStatus.COMPLETED,
-            (JobStatus.PROCESSING,),
-            summary=summary,
-            progress=1,
-            completed_at=utc_now(),
+    async def complete(self, job_id: str, attempt: int, summary: TranscriptionSummary) -> bool:
+        return bool(
+            await self._transition(
+                job_id,
+                JobStatus.COMPLETED,
+                (JobStatus.PROCESSING,),
+                attempt=attempt,
+                summary=summary,
+                progress=1,
+                completed_at=utc_now(),
+            )
         )
 
-    async def fail(self, job_id: str, code: str, message: str) -> bool:
-        return await self._transition(
-            job_id,
-            JobStatus.FAILED,
-            (JobStatus.QUEUED, JobStatus.PROCESSING),
-            error=JobErrorInfo(code=code, message=message),
-            completed_at=utc_now(),
+    async def fail(self, job_id: str, attempt: int, code: str, message: str) -> bool:
+        return bool(
+            await self._transition(
+                job_id,
+                JobStatus.FAILED,
+                (JobStatus.PROCESSING,),
+                attempt=attempt,
+                error=JobErrorInfo(code=code, message=message),
+                completed_at=utc_now(),
+            )
         )
 
     async def cancel(self, job_id: str) -> bool:
-        return await self._transition(
-            job_id,
-            JobStatus.CANCELLED,
-            (JobStatus.QUEUED, JobStatus.PROCESSING),
-            completed_at=utc_now(),
+        """Cancel a queued or processing job (user action, so not fenced by attempt)."""
+        return bool(
+            await self._transition(
+                job_id,
+                JobStatus.CANCELLED,
+                (JobStatus.QUEUED, JobStatus.PROCESSING),
+                completed_at=utc_now(),
+            )
         )
 
     # ---- Recovery & liveness -----------------------------------------------------------------

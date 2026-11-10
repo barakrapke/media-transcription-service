@@ -88,6 +88,11 @@ class Worker:
         )
         try:
             await self._processor.process(job_id)
+        except RedisError:
+            # e.g. Redis went away before the job started or while recording a failure. The
+            # job is recovered by the sweeper; this worker keeps running and retries claiming.
+            logger.exception("Redis error while handling the job; it will be recovered")
+            await asyncio.sleep(_RETRY_DELAY_SECONDS)
         finally:
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)

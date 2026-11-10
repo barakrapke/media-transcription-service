@@ -38,6 +38,7 @@ async def job_events(
     yield "retry: 3000\n\n"
     sent_segments = 0
     last_status: JobStatus | None = None
+    last_attempt: int | None = None
     last_progress: float | None = None
     last_write = time.monotonic()
 
@@ -45,24 +46,22 @@ async def job_events(
         chunks: list[str] = []
         job = await store.get(job_id)
         if job is None:
-            yield format_event(
-                "failed",
-                {
-                    "error": {
-                        "code": ErrorCode.JOB_NOT_FOUND,
-                        "message": "The job no longer exists.",
-                    }
-                },
-            )
+            error = {"code": ErrorCode.JOB_NOT_FOUND, "message": "The job no longer exists."}
+            yield format_event("failed", {"error": error})
             return
 
-        status_changed = job.status != last_status
-        status_event = format_event("status", {"status": job.status})
-        if status_changed and job.status is JobStatus.QUEUED and last_status is not None:
-            sent_segments = 0  # re-queued after a worker was lost; segments start over
-        # Non-terminal status first (so clients reset before new segments arrive); a terminal
-        # status after the final segments so that it is always the last thing before the end.
-        if status_changed and not job.status.is_terminal:
+        # A new attempt means the job was re-run after its worker was lost: segments start
+        # over. Detected by the attempt number because the intermediate ``queued`` state can be
+        # too short-lived for a poll to observe.
+        restarted = last_attempt is not None and job.attempts != last_attempt
+        if restarted:
+            sent_segments = 0
+        status_changed = restarted or job.status != last_status
+        status_event = format_event("status", {"status": job.status, "attempt": job.attempts})
+        # A non-terminal status (and any restart, which tells clients to reset) goes before the
+        # segments; a terminal status after the final segments, so it is the last status sent.
+        status_first = restarted or not job.status.is_terminal
+        if status_changed and status_first:
             chunks.append(status_event)
 
         for segment in await store.get_segments(job_id, start=sent_segments):
@@ -73,9 +72,10 @@ async def job_events(
             chunks.append(format_event("progress", {"progress": job.progress}))
             last_progress = job.progress
 
-        if status_changed and job.status.is_terminal:
+        if status_changed and not status_first:
             chunks.append(status_event)
         last_status = job.status
+        last_attempt = job.attempts
 
         if job.status is JobStatus.COMPLETED:
             response = JobResponse.from_job(job, await store.get_segments(job_id))

@@ -41,5 +41,9 @@ def test_list_older_than(tmp_path: Path) -> None:
     storage.save("new", io.BytesIO(b"1"), max_bytes=10)
     past = time.time() - 3600
     os.utime(storage.path_for("old"), (past, past))
-    assert storage.list_older_than(60) == ["old"]
+    (tmp_path / ".DS_Store").write_bytes(b"")
+    (tmp_path / "notes.tmp").write_bytes(b"")
+    for name in (".DS_Store", "notes.tmp"):
+        os.utime(tmp_path / name, (past, past))
+    assert storage.list_older_than(60) == ["old"]  # only names that can be job ids
     assert storage.free_bytes() > 0

@@ -132,12 +132,15 @@ class TranscriptionService:
     async def delete(self, job_id: str) -> JobResponse | None:
         """Cancel an active job (returns its new state) or delete a finished one (returns None)."""
         job = await self._get_job(job_id)
-        if not job.status.is_terminal and await self._store.cancel(job_id):
-            if job.status is JobStatus.QUEUED:
-                await self._store.remove_from_pending(job_id)
-                self._storage.delete(job_id)
-            # A processing job is stopped by its worker, which also removes the upload.
-            logger.info("Job %s cancelled", job_id)
+        if not job.status.is_terminal:
+            if await self._store.cancel(job_id):
+                if job.status is JobStatus.QUEUED:
+                    await self._store.remove_from_pending(job_id)
+                    self._storage.delete(job_id)
+                # A processing job is stopped by its worker, which also removes the upload.
+                logger.info("Job %s cancelled", job_id)
+            # If the cancel lost a race with completion, report the finished job: a request
+            # to cancel must never delete a result.
             return await self.get(job_id)
         await self._store.delete(job_id)
         self._storage.delete(job_id)

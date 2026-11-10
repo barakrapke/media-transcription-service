@@ -51,8 +51,8 @@ async def test_stream_follows_a_job_to_completion(
     assert response.headers["cache-control"] == "no-cache"
     events = parse_events(response.text)
     names = [name for name, _ in events]
-    assert names[0] == "status" and events[0][1] == {"status": "queued"}
-    assert ("status", {"status": "processing"}) in events
+    assert names[0] == "status" and events[0][1] == {"status": "queued", "attempt": 0}
+    assert ("status", {"status": "processing", "attempt": 1}) in events
     assert [data["text"] for name, data in events if name == "segment"] == [
         f"s{i}" for i in range(5)
     ]
@@ -82,8 +82,9 @@ async def test_stream_reports_failures(
 ) -> None:
     job_id = await create(client, media.tone)
     await store.claim(timeout=1, heartbeat_ttl=5)
-    await store.start(job_id)
-    await store.fail(job_id, "DECODE_ERROR", "bad media")
+    attempt = await store.start(job_id)
+    assert attempt is not None
+    await store.fail(job_id, attempt, "DECODE_ERROR", "bad media")
 
     events = parse_events((await client.get(f"{API}/{job_id}/events")).text)
     assert events[-1] == ("failed", {"error": {"code": "DECODE_ERROR", "message": "bad media"}})
@@ -99,3 +100,32 @@ async def test_stream_ends_when_job_is_deleted(
     events = parse_events((await asyncio.wait_for(stream, timeout=5)).text)
     assert events[-1][0] == "failed"
     assert events[-1][1]["error"]["code"] == "JOB_NOT_FOUND"  # type: ignore[index]
+
+
+async def test_stream_resets_when_job_is_rerun_without_visible_queued_state(
+    client: httpx.AsyncClient, store: JobStore, media: MediaFiles
+) -> None:
+    """Worker A dies mid-job; the sweeper re-queues it and an idle worker B re-claims it before
+    the stream polls again. The client must be told to reset and must get all of B's segments."""
+    job_id = await create(client, media.tone)
+    await store.claim(timeout=1, heartbeat_ttl=5)
+    assert await store.start(job_id) == 1
+    for i in range(3):
+        await store.append_segment(job_id, 1, Segment(id=i, start=i, end=i + 1, text=f"A{i}"), 0.1)
+
+    stream = asyncio.create_task(client.get(f"{API}/{job_id}/events"))
+    await asyncio.sleep(0.05)  # the client has received A's three segments
+    # Re-queue and immediate re-start, faster than the stream's poll interval.
+    await store.redis.hset(f"job:{job_id}", "status", "queued")
+    await store.redis.delete(f"job:{job_id}:segments")
+    assert await store.start(job_id) == 2
+    for i in range(2):
+        await store.append_segment(job_id, 2, Segment(id=i, start=i, end=i + 1, text=f"B{i}"), 0.5)
+    await store.fail(job_id, 2, "DECODE_ERROR", "end of test")
+
+    events = parse_events((await asyncio.wait_for(stream, timeout=5)).text)
+    attempts = [data["attempt"] for name, data in events if name == "status"]
+    assert attempts[0] == 1 and 2 in attempts  # the client sees the new attempt
+    reset_at = next(i for i, (n, d) in enumerate(events) if n == "status" and d["attempt"] == 2)
+    after_reset = [d["text"] for n, d in events[reset_at:] if n == "segment"]
+    assert after_reset == ["B0", "B1"]

@@ -26,8 +26,12 @@ class UploadStorage:
     def ensure_root(self) -> None:
         self._root.mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def is_valid_name(name: str) -> bool:
+        return name.isascii() and name.isalnum()  # job ids are uuid4 hex
+
     def path_for(self, job_id: str) -> Path:
-        if not job_id.isalnum():  # job ids are uuid4 hex; refuse anything else defensively
+        if not self.is_valid_name(job_id):  # refuse anything else defensively
             raise ValueError(f"invalid job id: {job_id!r}")
         return self._root / job_id
 
@@ -52,14 +56,15 @@ class UploadStorage:
         self.path_for(job_id).unlink(missing_ok=True)
 
     def list_older_than(self, age_seconds: float) -> list[str]:
-        """Job ids of stored files whose modification time is older than ``age_seconds``."""
+        """Job ids of stored files whose modification time is older than ``age_seconds``.
+        Files that can't be uploads (e.g. ``.DS_Store``) are ignored."""
         if not self._root.exists():
             return []
         cutoff = time.time() - age_seconds
         return [
             path.name
             for path in self._root.iterdir()
-            if path.is_file() and path.stat().st_mtime < cutoff
+            if self.is_valid_name(path.name) and path.is_file() and path.stat().st_mtime < cutoff
         ]
 
     def free_bytes(self) -> int:

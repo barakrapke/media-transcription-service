@@ -129,6 +129,11 @@ class TranscriptionError(JobFailure):
     default_message = "The transcription model failed to process the audio."
 
 
+class MediaTooLongError(JobFailure):
+    code = ErrorCode.DURATION_TOO_LONG
+    default_message = "The media is longer than the maximum allowed duration."
+
+
 class JobTimeoutError(JobFailure):
     code = ErrorCode.JOB_TIMEOUT
     default_message = "The transcription job exceeded the maximum processing time."
