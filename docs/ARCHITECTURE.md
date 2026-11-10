@@ -75,6 +75,9 @@ queued ──▶ processing ──▶ completed
 ```
 
 - Transitions are performed by a Lua script that checks the current state, so they are atomic.
+- **Fencing:** `queued → processing` increments `attempts` and returns it to the worker as a
+  fencing token. Every later worker write (segment, `completed`, `failed`) must present the same
+  attempt, so a worker that was presumed dead and replaced cannot write into the new run.
   Terminal states (`completed`, `failed`, `cancelled`) are immutable — a late or zombie worker
   cannot overwrite them.
 - Job state expires `RESULT_TTL_SECONDS` (default 24 h) after reaching a terminal state.
@@ -96,9 +99,11 @@ queued ──▶ processing ──▶ completed
 
 | Concern | Mechanism |
 |---|---|
-| Worker crashes mid-job | Reliable-queue pattern: `BLMOVE pending → processing`. A **recovery sweeper** (runs in every worker, every 30 s) finds ids in `processing` whose heartbeat has expired and whose `claimed_at` is older than the heartbeat TTL (avoids racing a worker that has just claimed the job). If `attempts < MAX_ATTEMPTS` the job is re-queued, otherwise it fails with `WORKER_LOST`. |
+| Worker crashes mid-job | Reliable-queue pattern: `BLMOVE pending → processing`. A **recovery sweeper** (runs in every worker, every 30 s) finds ids in `processing` whose heartbeat has expired and whose `claimed_at` is older than the heartbeat TTL (avoids racing a worker that has just claimed the job). If `attempts < MAX_ATTEMPTS` the job is re-queued, otherwise it fails with `WORKER_LOST`. If the "dead" worker was only stalled, its later writes are rejected by the attempt fencing token. |
 | Retry policy | Only infrastructure failures (lost worker) are retried. Deterministic failures (`DECODE_ERROR`, `TRANSCRIPTION_ERROR`) are not — they would fail again. |
-| Long / hung jobs | ffmpeg runs with a subprocess timeout (`DECODE_TIMEOUT`). Inference checks the job deadline between segments and stops cleanly (`JOB_TIMEOUT`). |
+| Long / hung jobs | ffmpeg runs with a subprocess timeout (`DECODE_TIMEOUT`). Inference checks the job deadline between segments and stops cleanly (`JOB_TIMEOUT`). The outcome is recorded immediately, but the worker waits for the inference thread to exit before claiming another job, so two transcriptions never share the model at once. |
+| Unknown duration | When ffprobe can't report a duration (e.g. browser-recorded WebM), the API can't enforce `MAX_DURATION_SECONDS`; the worker decodes at most the limit + 1 s and fails the job with `DURATION_TOO_LONG` if the audio is longer. |
+| Redis outage mid-job | The worker catches Redis errors per job and stays up (no model reload). The job's outcome can't be recorded, so it is left claimed and the sweeper re-queues it once Redis is back; the upload is kept for the retry. |
 | Cancellation | `DELETE` moves the job to `cancelled` atomically. A queued job is also removed from the queue (a worker that claims it anyway skips it, because `queued → processing` fails). A processing job is stopped by its worker: its next segment write is rejected, so it stops and cleans up. No separate cancel flag is needed. |
 | Overload | `MAX_QUEUE_SIZE` → `503 QUEUE_FULL` with `Retry-After`. |
 | Shutdown | Worker on `SIGTERM` stops claiming jobs and finishes the current one within `stop_grace_period`; if killed, the sweeper re-queues it. API closes SSE streams; clients reconnect and get a replay. |
@@ -176,7 +181,7 @@ queued ──▶ processing ──▶ completed
 
 | Event | Payload |
 |---|---|
-| `status` | `{status}` on every state change |
+| `status` | `{status, attempt}` on every state change, and when a new attempt starts |
 | `progress` | `{progress}` |
 | `segment` | One segment, as soon as the model produces it |
 | `completed` | Full result; stream closes |
@@ -184,9 +189,11 @@ queued ──▶ processing ──▶ completed
 
 On connect the server first replays the current state and all segments produced so far, so a late
 or reconnecting client never misses data. A terminal `status` is always sent after the final
-segments, so it is the last event before `completed`/`failed`. If a job is re-queued after a lost
-worker, clients receive `status: queued` and the segments start over. Internally the SSE endpoint reads the job state from
-Redis on a short interval and emits deltas — no pub/sub is required.
+segments, so it is the last event before `completed`/`failed`. If a job is re-run after a lost
+worker, the stream detects it by the attempt number (the intermediate `queued` state may be too
+short-lived to observe), sends `status` with the new attempt first, and replays the new run's
+segments; clients clear their transcript when the attempt changes. Internally the SSE endpoint reads the job
+state from Redis on a short interval and emits deltas — no pub/sub is required.
 
 ### Errors
 
@@ -209,7 +216,7 @@ Every error uses one shape:
 | API | `QUEUE_FULL` | 503 |
 | API | `DEPENDENCY_UNAVAILABLE` | 503 |
 | API | `INTERNAL_ERROR` | 500 (details logged, never returned) |
-| Job | `DECODE_ERROR`, `DECODE_TIMEOUT`, `TRANSCRIPTION_ERROR`, `JOB_TIMEOUT`, `WORKER_LOST` | in `job.error` |
+| Job | `DECODE_ERROR`, `DECODE_TIMEOUT`, `DURATION_TOO_LONG`, `TRANSCRIPTION_ERROR`, `JOB_TIMEOUT`, `WORKER_LOST` | in `job.error` |
 
 ---
 
@@ -272,3 +279,4 @@ tests with coverage, and E2E.
 | D12 | One image, two commands | Separate API / worker images | Simpler build; slim API image noted as future work. |
 | D13 | fakeredis in tests | testcontainers | Tests run without Docker; E2E covers real Redis. |
 | D14 | Cancellation through the job status | A separate cancel-flag key | The segment write already checks the status atomically, so a status change stops the worker with no extra key, no extra read, and immediate visibility to clients. |
+| D15 | Attempt number as a fencing token | Trusting the heartbeat/status alone | A stalled worker can outlive its heartbeat; without a token its late writes would mix two runs. The attempt counter already exists, so fencing costs one comparison per write. |

@@ -72,6 +72,7 @@ A completed job:
   "filename": "meeting.mp4",
   "language": "en",
   "word_timestamps": false,
+  "attempts": 1,
   "created_at": "2026-11-10T09:49:55.997Z",
   "started_at": "2026-11-10T09:49:56.012Z",
   "completed_at": "2026-11-10T09:49:58.611Z",
@@ -105,7 +106,8 @@ Every error has the same shape, with a stable `code`:
 | 503 | `QUEUE_FULL`, `DEPENDENCY_UNAVAILABLE` (both with `Retry-After`) |
 
 A job that fails during processing ends in `status: "failed"` with `error.code` set to
-`DECODE_ERROR`, `DECODE_TIMEOUT`, `TRANSCRIPTION_ERROR`, `JOB_TIMEOUT` or `WORKER_LOST`.
+`DECODE_ERROR`, `DECODE_TIMEOUT`, `DURATION_TOO_LONG` (when the length could only be determined by
+decoding), `TRANSCRIPTION_ERROR`, `JOB_TIMEOUT` or `WORKER_LOST`.
 
 Health endpoints: `GET /healthz` (liveness) and `GET /readyz` (Redis reachable and at least one
 worker alive).
