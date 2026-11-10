@@ -56,11 +56,14 @@ async def job_events(
             )
             return
 
-        if job.status != last_status:
-            if job.status is JobStatus.QUEUED and last_status is not None:
-                sent_segments = 0  # re-queued after a worker was lost; segments start over
-            chunks.append(format_event("status", {"status": job.status}))
-            last_status = job.status
+        status_changed = job.status != last_status
+        status_event = format_event("status", {"status": job.status})
+        if status_changed and job.status is JobStatus.QUEUED and last_status is not None:
+            sent_segments = 0  # re-queued after a worker was lost; segments start over
+        # Non-terminal status first (so clients reset before new segments arrive); a terminal
+        # status after the final segments so that it is always the last thing before the end.
+        if status_changed and not job.status.is_terminal:
+            chunks.append(status_event)
 
         for segment in await store.get_segments(job_id, start=sent_segments):
             chunks.append(format_event("segment", segment.model_dump(), event_id=str(segment.id)))
@@ -69,6 +72,10 @@ async def job_events(
         if job.progress != last_progress:
             chunks.append(format_event("progress", {"progress": job.progress}))
             last_progress = job.progress
+
+        if status_changed and job.status.is_terminal:
+            chunks.append(status_event)
+        last_status = job.status
 
         if job.status is JobStatus.COMPLETED:
             response = JobResponse.from_job(job, await store.get_segments(job_id))
