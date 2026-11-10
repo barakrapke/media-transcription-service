@@ -162,24 +162,25 @@ available during development (see [Assumptions](#assumptions-and-trade-offs)).
 
 ## Development
 
-Requirements: [uv](https://docs.astral.sh/uv/), ffmpeg, Docker (for Redis). Run `make help` to
-list all targets.
+Requirements: [uv](https://docs.astral.sh/uv/) and ffmpeg (`brew install ffmpeg` /
+`apt install ffmpeg`). Run `make help` to list the targets.
 
 ```sh
-make install       # create the virtualenv (Python 3.12) with dev tools
-make dev-redis     # Redis in Docker on :6379
-make dev-api       # API on http://localhost:8000      (separate terminal)
-make dev-worker    # a worker                          (separate terminal)
+uv sync                                   # virtualenv (Python 3.12) with dev tools
+docker run -d -p 6379:6379 redis:7.4-alpine
+uv run python -m transcriber.api          # API + UI on http://localhost:8000
+uv run python -m transcriber.worker       # a worker (in another terminal)
 ```
 
 ### Tests
 
 ```sh
-make test          # unit + integration tests with coverage (gate: 80%); needs ffmpeg
-make test-docker   # the same, inside Docker: nothing needed on the host
-make e2e           # full stack in Docker with the tiny model, then end-to-end tests
+make test          # unit + integration tests with coverage (gate: 80%)
 make lint          # ruff (lint + format check) and mypy --strict
+make e2e           # start the stack and run the end-to-end tests against it
 ```
+
+For a faster end-to-end run, use the tiny model: `MODEL_NAME=Systran/faster-whisper-tiny make e2e`.
 
 | Layer | What it covers |
 |---|---|
