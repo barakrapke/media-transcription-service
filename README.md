@@ -241,8 +241,9 @@ docs/              ARCHITECTURE.md (design + decision record)
   itself is enforced while the body is still arriving.
 - The CTranslate2 inference call cannot be interrupted mid-segment. Cancellation and the job timeout
   take effect at the next segment boundary, usually within a few seconds.
-- The media player in the UI only works in the browser session that uploaded the file. The server
-  never sends the media back; it is deleted as soon as the job finishes.
+- The media player in the UI works in the tab that uploaded the file. The server never sends the
+  media back (it is deleted as soon as the job finishes), so after a refresh or from a shared link
+  the UI says so and lets the user pick the file again to play it locally. Nothing is re-uploaded.
 - Progress is estimated from the position of the latest segment, so it advances in steps.
 
 ### Out of scope / future work

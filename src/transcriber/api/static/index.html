@@ -102,6 +102,14 @@
       <div id="job-error" class="alert" role="alert" hidden></div>
 
       <div id="player-wrap" class="player-wrap" hidden></div>
+      <div id="player-missing" class="player-missing" hidden>
+        <span>
+          Audio playback is only available in the tab where the file was uploaded — the server
+          deletes the media once it is transcribed.
+        </span>
+        <label class="btn btn-ghost" for="reattach-input">Choose the file to play it here</label>
+        <input id="reattach-input" type="file" accept="audio/*,video/*" hidden>
+      </div>
 
       <div id="result-bar" class="result-bar" hidden>
         <dl class="meta" id="meta"></dl>

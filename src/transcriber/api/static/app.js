@@ -191,6 +191,7 @@ function openJob(job, { withMedia }) {
   $("job-title").title = job.filename;
 
   if (withMedia && state.file) attachPlayer(state.file);
+  else show($("player-missing"), true);
   applyJob(job);
   if (!TERMINAL.has(job.status)) subscribe();
 }
@@ -204,7 +205,19 @@ function attachPlayer(file) {
   media.addEventListener("timeupdate", () => highlight(media.currentTime));
   $("player-wrap").replaceChildren(media);
   show($("player-wrap"), true);
+  show($("player-missing"), false);
   state.media = media;
+  document.querySelectorAll(".segment-time").forEach((button) => {
+    button.disabled = false;
+    button.title = "Play from here";
+  });
+}
+
+function reattachMedia(file) {
+  if (!file) return;
+  // Playback is local: the file is opened in the browser, nothing is uploaded again.
+  if (state.mediaUrl) URL.revokeObjectURL(state.mediaUrl);
+  attachPlayer(file);
 }
 
 function resetJobView() {
@@ -215,6 +228,8 @@ function resetJobView() {
   $("transcript").replaceChildren();
   $("player-wrap").replaceChildren();
   show($("player-wrap"), false);
+  show($("player-missing"), false);
+  $("reattach-input").value = "";
   show($("result-bar"), false);
   show($("job-error"), false);
   show($("transcript-empty"), false);
@@ -274,7 +289,7 @@ function addSegment(segment) {
   time.type = "button";
   time.className = "segment-time";
   time.textContent = formatTime(segment.start);
-  time.title = state.media ? "Play from here" : "Original media is only playable in the session it was uploaded";
+  time.title = state.media ? "Play from here" : "Choose the file above to enable playback";
   time.disabled = !state.media;
   time.addEventListener("click", () => seek(segment.start));
 
@@ -447,6 +462,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("upload-form").addEventListener("submit", upload);
   $("cancel-btn").addEventListener("click", cancelJob);
   $("new-btn").addEventListener("click", newTranscription);
+  $("reattach-input").addEventListener("change", (e) => reattachMedia(e.target.files[0]));
   checkService();
   setInterval(checkService, 10000);
   restoreFromUrl();
