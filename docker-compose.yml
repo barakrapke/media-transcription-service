@@ -8,7 +8,10 @@ x-app: &app
     - path: .env
       required: false
   environment: &app-env
+    # Container-internal values; these take precedence over a local .env file.
     REDIS_URL: redis://redis:6379/0
+    DATA_DIR: /data
+    API_PORT: "8000"
     LOG_FORMAT: ${LOG_FORMAT:-json}
   depends_on:
     redis:
