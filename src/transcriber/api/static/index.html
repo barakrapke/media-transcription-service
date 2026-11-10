@@ -1,1 +1,125 @@
-<!doctype html><title>placeholder</title>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Media Transcription</title>
+  <meta name="description" content="Upload an audio or video file and get a timestamped transcript.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%234f46e5'/%3E%3Cpath d='M7 10v4M10 7v10M13 9v6M16 11v2' stroke='white' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+        <rect width="24" height="24" rx="6"></rect>
+        <path d="M7 10v4M10 7v10M13 9v6M16 11v2"></path>
+      </svg>
+      <span>Media Transcription</span>
+    </div>
+    <div class="topbar-links">
+      <span id="service-status" class="service-status" data-state="unknown" role="status">
+        <span class="dot" aria-hidden="true"></span><span class="label">Checking…</span>
+      </span>
+      <a href="/docs" target="_blank" rel="noopener">API docs</a>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- Upload ------------------------------------------------------------------------------>
+    <section id="upload-view" class="card" aria-labelledby="upload-title">
+      <h1 id="upload-title">Transcribe audio or video</h1>
+      <p class="muted">Drop a file below. Transcription runs in the background and appears as it is produced.</p>
+
+      <form id="upload-form" novalidate>
+        <label id="dropzone" class="dropzone" for="file-input" tabindex="0">
+          <input id="file-input" name="file" type="file" accept="audio/*,video/*" hidden>
+          <svg class="dropzone-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"></path>
+          </svg>
+          <span class="dropzone-title" id="dropzone-title">Drag a file here or <u>browse</u></span>
+          <span class="dropzone-hint" id="dropzone-hint">MP3, WAV, M4A, MP4, MOV, MKV, WebM… up to <span id="max-size">500 MB</span></span>
+        </label>
+
+        <div class="options">
+          <label class="field">
+            <span>Language</span>
+            <select id="language" name="language">
+              <option value="">Detect automatically</option>
+              <option value="en">English</option>
+              <option value="he">Hebrew</option>
+              <option value="ar">Arabic</option>
+              <option value="ru">Russian</option>
+              <option value="es">Spanish</option>
+              <option value="fr">French</option>
+              <option value="de">German</option>
+              <option value="it">Italian</option>
+              <option value="pt">Portuguese</option>
+              <option value="nl">Dutch</option>
+              <option value="pl">Polish</option>
+              <option value="uk">Ukrainian</option>
+              <option value="tr">Turkish</option>
+              <option value="hi">Hindi</option>
+              <option value="zh">Chinese</option>
+              <option value="ja">Japanese</option>
+              <option value="ko">Korean</option>
+            </select>
+          </label>
+          <label class="checkbox">
+            <input id="word-timestamps" name="word_timestamps" type="checkbox">
+            <span>Word-level timestamps</span>
+          </label>
+          <button id="submit-btn" class="btn btn-primary" type="submit" disabled>Transcribe</button>
+        </div>
+
+        <div id="upload-progress" class="upload-progress" hidden>
+          <div class="progress"><div class="progress-bar" id="upload-bar"></div></div>
+          <span class="muted" id="upload-label">Uploading…</span>
+        </div>
+      </form>
+      <div id="upload-error" class="alert" role="alert" hidden></div>
+    </section>
+
+    <!-- Job --------------------------------------------------------------------------------->
+    <section id="job-view" class="card" hidden aria-labelledby="job-title">
+      <div class="job-header">
+        <div class="job-title-wrap">
+          <h2 id="job-title" class="job-title">file</h2>
+          <span id="job-badge" class="badge" data-status="queued" aria-live="polite">Queued</span>
+        </div>
+        <div class="job-actions">
+          <button id="cancel-btn" class="btn btn-ghost" type="button">Cancel</button>
+          <button id="new-btn" class="btn btn-ghost" type="button">New transcription</button>
+        </div>
+      </div>
+
+      <div id="job-progress" class="job-progress">
+        <div class="progress"><div class="progress-bar" id="job-bar"></div></div>
+        <span class="muted" id="job-progress-label">Waiting for a worker…</span>
+      </div>
+
+      <div id="job-error" class="alert" role="alert" hidden></div>
+
+      <div id="player-wrap" class="player-wrap" hidden></div>
+
+      <div id="result-bar" class="result-bar" hidden>
+        <dl class="meta" id="meta"></dl>
+        <div class="downloads">
+          <button id="copy-btn" class="btn btn-ghost" type="button">Copy text</button>
+          <a class="btn btn-ghost" id="dl-txt" download>TXT</a>
+          <a class="btn btn-ghost" id="dl-srt" download>SRT</a>
+          <a class="btn btn-ghost" id="dl-vtt" download>VTT</a>
+        </div>
+      </div>
+
+      <ol id="transcript" class="transcript" aria-label="Transcript"></ol>
+      <p id="transcript-empty" class="muted empty" hidden>No speech was detected in this file.</p>
+    </section>
+  </main>
+
+  <footer class="footer muted">
+    Runs <span id="footer-model">an open-source Whisper model</span> locally · audio never leaves this server
+  </footer>
+</body>
+</html>
