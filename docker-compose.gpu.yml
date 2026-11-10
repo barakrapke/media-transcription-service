@@ -1,0 +1,20 @@
+# GPU override (NVIDIA). NOT TESTED - no GPU was available during development.
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+# Requires the NVIDIA Container Toolkit on the host.
+services:
+  worker:
+    build:
+      context: .
+      args:
+        WITH_CUDA: "true"
+    image: media-transcription-service:cuda
+    environment:
+      DEVICE: cuda
+      MODEL_NAME: ${MODEL_NAME:-Systran/faster-whisper-large-v3}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

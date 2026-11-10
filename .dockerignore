@@ -10,5 +10,4 @@ htmlcov
 data
 models
 docs
-tests
 .env

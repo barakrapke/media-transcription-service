@@ -13,3 +13,7 @@ build/
 data/
 models/
 .DS_Store
+
+# Local, machine-specific overrides
+docker-compose.override.yml
+.local/

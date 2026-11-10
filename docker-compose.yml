@@ -1,0 +1,64 @@
+name: transcription
+
+x-app: &app
+  build: .
+  image: media-transcription-service:latest
+  restart: unless-stopped
+  env_file:
+    - path: .env
+      required: false
+  environment: &app-env
+    REDIS_URL: redis://redis:6379/0
+    LOG_FORMAT: ${LOG_FORMAT:-json}
+  depends_on:
+    redis:
+      condition: service_healthy
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    <<: *app
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - uploads:/data/uploads
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    <<: *app
+    command: ["python", "-m", "transcriber.worker"]
+    environment:
+      <<: *app-env
+      MODEL_NAME: ${MODEL_NAME:-Systran/faster-whisper-small}
+    volumes:
+      - uploads:/data/uploads
+      - model-cache:/models
+    # Let the current job finish on `docker compose stop`; if it doesn't, it is re-queued.
+    stop_grace_period: 2m
+    healthcheck:
+      test: ["CMD", "python", "-m", "transcriber.worker.healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      # First start downloads the model; give it time before reporting unhealthy.
+      start_period: 10m
+
+volumes:
+  uploads:
+  model-cache:
+  redis-data:
