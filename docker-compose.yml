@@ -1,22 +1,5 @@
 name: transcription
 
-x-app: &app
-  build: .
-  image: media-transcription-service:latest
-  restart: unless-stopped
-  env_file:
-    - path: .env
-      required: false
-  environment: &app-env
-    # Container-internal values; these take precedence over a local .env file.
-    REDIS_URL: redis://redis:6379/0
-    DATA_DIR: /data
-    API_PORT: "8000"
-    LOG_FORMAT: ${LOG_FORMAT:-json}
-  depends_on:
-    redis:
-      condition: service_healthy
-
 services:
   redis:
     image: redis:7.4-alpine
@@ -31,11 +14,24 @@ services:
       retries: 10
 
   api:
-    <<: *app
+    build: .
+    image: media-transcription-service:latest
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      DATA_DIR: /data
+      API_PORT: "8000"
+      LOG_FORMAT: ${LOG_FORMAT:-json}
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
       - uploads:/data/uploads
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=3)"]
       interval: 10s
@@ -43,23 +39,32 @@ services:
       retries: 3
 
   worker:
-    <<: *app
+    build: .
+    image: media-transcription-service:latest  # same image as the api, different command
     command: ["python", "-m", "transcriber.worker"]
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
     environment:
-      <<: *app-env
+      REDIS_URL: redis://redis:6379/0
+      DATA_DIR: /data
+      LOG_FORMAT: ${LOG_FORMAT:-json}
       MODEL_NAME: ${MODEL_NAME:-Systran/faster-whisper-small}
     volumes:
       - uploads:/data/uploads
       - model-cache:/models
-    # Let the current job finish on `docker compose stop`; if it doesn't, it is re-queued.
+    depends_on:
+      redis:
+        condition: service_healthy
+    # On `docker compose stop` the current job may finish; if it doesn't, it is re-queued.
     stop_grace_period: 2m
     healthcheck:
       test: ["CMD", "python", "-m", "transcriber.worker.healthcheck"]
       interval: 15s
       timeout: 5s
       retries: 3
-      # First start downloads the model; give it time before reporting unhealthy.
-      start_period: 10m
+      start_period: 10m  # the first start downloads the model
 
 volumes:
   uploads:
