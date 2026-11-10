@@ -9,7 +9,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from transcriber.api.dependencies import get_service
 from transcriber.api.schemas import ErrorResponse, JobResponse
 from transcriber.api.service import TranscriptionService
-from transcriber.api.sse import job_events
 
 router = APIRouter(prefix="/v1/transcriptions", tags=["transcriptions"])
 
@@ -101,15 +100,7 @@ async def get_transcription(
 async def stream_transcription_events(
     job_id: str, request: Request, service: Service
 ) -> StreamingResponse:
-    await service.ensure_exists(job_id)
-    settings = request.app.state.settings
-    events = job_events(
-        request.app.state.store,
-        job_id,
-        poll_interval=settings.sse_poll_interval_seconds,
-        keepalive_interval=settings.sse_keepalive_seconds,
-        is_disconnected=request.is_disconnected,
-    )
+    events = await service.open_event_stream(job_id, request.is_disconnected)
     return StreamingResponse(
         events,
         media_type="text/event-stream",

@@ -215,10 +215,10 @@ async def test_worker_survives_redis_errors(
 
     worker = Worker(store, storage, transcriber, settings)
 
-    async def broken(job_id: str) -> None:
+    async def broken(self: JobProcessor, job_id: str) -> None:
         raise RedisConnectionError("connection reset")
 
-    monkeypatch.setattr(worker._processor, "process", broken)
+    monkeypatch.setattr(JobProcessor, "process", broken)
     monkeypatch.setattr("transcriber.worker.main._RETRY_DELAY_SECONDS", 0)
     await worker._process_with_heartbeat("0" * 32)  # must not raise
 

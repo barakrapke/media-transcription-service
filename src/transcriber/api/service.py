@@ -5,12 +5,14 @@ from __future__ import annotations
 import logging
 import unicodedata
 import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import PurePath
 
 from fastapi import UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from transcriber.api.schemas import JobResponse
+from transcriber.api.sse import job_events
 from transcriber.core.config import Settings
 from transcriber.core.errors import (
     DurationTooLongError,
@@ -108,8 +110,18 @@ class TranscriptionService:
             raise JobNotFoundError()
         return job
 
-    async def ensure_exists(self, job_id: str) -> None:
+    async def open_event_stream(
+        self, job_id: str, is_disconnected: Callable[[], Awaitable[bool]]
+    ) -> AsyncIterator[str]:
+        """Check the job exists (so a missing job is a plain 404), then return its SSE stream."""
         await self._get_job(job_id)
+        return job_events(
+            self._store,
+            job_id,
+            poll_interval=self._settings.sse_poll_interval_seconds,
+            keepalive_interval=self._settings.sse_keepalive_seconds,
+            is_disconnected=is_disconnected,
+        )
 
     async def get(self, job_id: str) -> JobResponse:
         job = await self._get_job(job_id)
