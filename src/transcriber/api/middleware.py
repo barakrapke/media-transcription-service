@@ -46,13 +46,14 @@ class MaxBodySizeMiddleware:
     response is suppressed and a 413 is sent instead.
     """
 
-    def __init__(self, app: ASGIApp, *, max_bytes: int, paths: set[str]):
+    def __init__(self, app: ASGIApp, *, max_bytes: int, limit_mb: int, paths: set[str]):
         self.app = app
         self.max_bytes = max_bytes
+        self.limit_mb = limit_mb
         self.paths = paths
 
     async def _reject(self, scope: Scope, receive: Receive, send: Send) -> None:
-        err = FileTooLargeError()
+        err = FileTooLargeError(f"The file is larger than the {self.limit_mb} MB limit.")
         response = error_response(err.status_code, err.code, err.message)
         await response(scope, receive, send)
 

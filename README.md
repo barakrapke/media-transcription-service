@@ -126,9 +126,9 @@ copy it to `.env` to override any. The most useful ones:
 | `DEVICE` | `auto` | `auto`, `cpu` or `cuda` |
 | `COMPUTE_TYPE` | `int8` on CPU, `float16` on CUDA | CTranslate2 quantization |
 | `CPU_THREADS` | `0` (auto) | Inference threads per worker |
-| `MAX_UPLOAD_MB` | `500` | Upload size limit |
-| `MAX_DURATION_SECONDS` | `7200` | Media length limit |
-| `MAX_QUEUE_SIZE` | `100` | Pending jobs before uploads get `503 QUEUE_FULL` |
+| `MAX_UPLOAD_MB` | `200` | Upload size limit |
+| `MAX_DURATION_SECONDS` | `3600` | Media length limit (1 hour) |
+| `MAX_QUEUE_SIZE` | `20` | Pending jobs before uploads get `503 QUEUE_FULL` |
 | `JOB_TIMEOUT_SECONDS` | `3600` | Maximum processing time per job |
 | `RESULT_TTL_SECONDS` | `86400` | How long finished jobs are kept |
 | `MAX_ATTEMPTS` | `2` | Attempts before a job whose worker died is failed |
@@ -219,7 +219,7 @@ docs/              ARCHITECTURE.md (design + decision record)
 - **Single tenant on a trusted network**: there is no authentication, no per-user isolation and
   no rate limiting.
 - **CPU-only machine.** The defaults (`small`, int8) are chosen so the service is usable on a laptop.
-- **Files up to 500 MB / 2 hours.** Longer media is rejected, not split.
+- **Files up to 200 MB / 1 hour** (configurable). Larger or longer media is rejected, not split.
 - **Transcripts are short-lived.** Finished jobs expire after 24 hours; there is no history.
 - **One job per worker process.** Throughput scales by adding workers.
 - **Internet access on the worker's first start** to download the model from Hugging Face.

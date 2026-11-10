@@ -25,9 +25,9 @@ class Settings(BaseSettings):
     # --- API ------------------------------------------------------------------------------
     api_host: str = "0.0.0.0"  # noqa: S104 - the API is meant to listen on all interfaces in a container
     api_port: int = Field(default=8000, ge=1, le=65535)
-    max_upload_mb: int = Field(default=500, gt=0)
-    max_duration_seconds: int = Field(default=7200, gt=0)
-    max_queue_size: int = Field(default=100, gt=0)
+    max_upload_mb: int = Field(default=200, gt=0)
+    max_duration_seconds: int = Field(default=3600, gt=0)
+    max_queue_size: int = Field(default=20, gt=0)
     probe_timeout_seconds: float = Field(default=30, gt=0)
     sse_poll_interval_seconds: float = Field(default=0.5, gt=0)
     sse_keepalive_seconds: float = Field(default=15, gt=0)

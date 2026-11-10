@@ -63,6 +63,7 @@ def create_app(settings: Settings | None = None, *, redis: Redis | None = None) 
     app.add_middleware(
         MaxBodySizeMiddleware,
         max_bytes=settings.max_upload_bytes + _MULTIPART_OVERHEAD_BYTES,
+        limit_mb=settings.max_upload_mb,
         paths={transcriptions.router.prefix},
     )
     app.add_middleware(RequestIdMiddleware)  # added last = outermost

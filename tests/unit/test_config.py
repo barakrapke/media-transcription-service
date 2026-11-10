@@ -14,7 +14,9 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DATA_DIR", raising=False)  # set in the Docker image
     settings = make()
     assert settings.model_name == "Systran/faster-whisper-small"
-    assert settings.max_upload_bytes == 500 * 1024 * 1024
+    assert settings.max_upload_bytes == 200 * 1024 * 1024
+    assert settings.max_duration_seconds == 3600
+    assert settings.max_queue_size == 20
     assert settings.upload_dir == Path("data/uploads")
 
 

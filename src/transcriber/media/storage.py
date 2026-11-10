@@ -45,7 +45,8 @@ class UploadStorage:
                 while chunk := source.read(_CHUNK_SIZE):
                     written += len(chunk)
                     if written > max_bytes:
-                        raise FileTooLargeError()
+                        limit_mb = max_bytes // (1024 * 1024)
+                        raise FileTooLargeError(f"The file is larger than the {limit_mb} MB limit.")
                     out.write(chunk)
         except BaseException:
             target.unlink(missing_ok=True)
