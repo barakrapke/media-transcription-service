@@ -48,7 +48,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S", "PTH"]
+"tests/**" = ["S", "PTH", "ASYNC110"]  # tests poll Redis state on purpose
 
 [tool.mypy]
 python_version = "3.12"
