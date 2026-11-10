@@ -43,16 +43,22 @@ domain packages (`core`, `jobs`, `media`, `engine`, `formatters`).
 ## 2. Request flow
 
 1. **Upload** — `POST /v1/transcriptions` (multipart: `file`, optional `language`, `word_timestamps`).
-   - Body is streamed to `/data/uploads/{job_id}` in chunks; the upload is aborted with `413` once
-     `MAX_UPLOAD_MB` is exceeded. The user's filename is stored only as metadata.
+   - The size limit is enforced while the body streams in: an ASGI middleware rejects a declared
+     `Content-Length` above the limit immediately, and otherwise counts bytes and answers `413` as
+     soon as `MAX_UPLOAD_MB` is crossed (also for chunked uploads without a length).
+   - The file is copied to `/data/uploads/{job_id}` in chunks (the size is checked again there).
+     The user's filename is stored only as metadata.
    - `ffprobe` verifies the file is readable, has ≥1 audio stream and is within `MAX_DURATION_SECONDS`.
-   - Queue length is checked against `MAX_QUEUE_SIZE` (backpressure → `503` + `Retry-After`).
-   - Job hash is created in state `queued`; job id is pushed to the pending queue.
+   - Queue length is checked against `MAX_QUEUE_SIZE` (backpressure → `503` + `Retry-After`) —
+     cheaply before saving the file, and again atomically when enqueuing.
+   - One Lua script creates the job hash in state `queued` and pushes the id to the pending queue.
    - Response: `202 Accepted` with the job resource and a `Location` header.
-2. **Processing** — a worker `BLMOVE`s the job id from `pending` to `processing`, transitions the
-   job to `processing`, decodes with ffmpeg, then iterates faster-whisper's segment generator. For
-   each segment it appends to the segment list, updates `progress`, refreshes its heartbeat and
-   checks the cancel flag and the job deadline.
+2. **Processing** — a worker `BLMOVE`s the job id from `pending` to `processing`, sets its heartbeat
+   and `claimed_at`, transitions the job to `processing`, decodes with ffmpeg, then runs the model
+   in a thread. The thread hands each segment to the event loop, which appends it to the segment
+   list and updates `progress` — a write that succeeds only while the job is still `processing`,
+   so cancellation is noticed at the next segment. The job deadline is checked between segments;
+   the heartbeat is refreshed by a separate task.
 3. **Completion** — the full result is written, the job transitions to `completed`, files are
    deleted, the job id is removed from `processing`, and the job hash gets its TTL.
 4. **Reading** — clients poll `GET /v1/transcriptions/{id}` or subscribe to `/events`. Completed
@@ -77,10 +83,9 @@ queued ──▶ processing ──▶ completed
 
 | Key | Type | Content |
 |---|---|---|
-| `job:{id}` | hash | `status, filename, language, word_timestamps, progress, attempts, created_at, started_at, completed_at, claimed_at, error (JSON), result (JSON)` |
-| `job:{id}:segments` | list | Segment JSON, appended as produced (SSE live view + replay) |
+| `job:{id}` | hash | `status, filename, language, word_timestamps, progress, attempts, created_at, started_at, completed_at, claimed_at, error (JSON), summary (JSON)` — the result without segments |
+| `job:{id}:segments` | list | Segment JSON, appended as produced. The single source of segments: used for the SSE live view and replay, and to assemble the final result |
 | `job:{id}:heartbeat` | string, TTL | Refreshed by the worker owning the job |
-| `job:{id}:cancel` | string | Cancel request flag |
 | `queue:pending` | list | Job ids waiting for a worker |
 | `queue:processing` | list | Job ids claimed by a worker |
 | `worker:{worker_id}` | string, TTL | Worker liveness (used by `/readyz` and worker healthcheck) |
@@ -94,7 +99,7 @@ queued ──▶ processing ──▶ completed
 | Worker crashes mid-job | Reliable-queue pattern: `BLMOVE pending → processing`. A **recovery sweeper** (runs in every worker, every 30 s) finds ids in `processing` whose heartbeat has expired and whose `claimed_at` is older than the heartbeat TTL (avoids racing a worker that has just claimed the job). If `attempts < MAX_ATTEMPTS` the job is re-queued, otherwise it fails with `WORKER_LOST`. |
 | Retry policy | Only infrastructure failures (lost worker) are retried. Deterministic failures (`DECODE_ERROR`, `TRANSCRIPTION_ERROR`) are not — they would fail again. |
 | Long / hung jobs | ffmpeg runs with a subprocess timeout (`DECODE_TIMEOUT`). Inference checks the job deadline between segments and stops cleanly (`JOB_TIMEOUT`). |
-| Cancellation | `DELETE` on a queued job removes it from the queue; on a processing job it sets the cancel flag, which the worker checks between segments. |
+| Cancellation | `DELETE` moves the job to `cancelled` atomically. A queued job is also removed from the queue (a worker that claims it anyway skips it, because `queued → processing` fails). A processing job is stopped by its worker: its next segment write is rejected, so it stops and cleans up. No separate cancel flag is needed. |
 | Overload | `MAX_QUEUE_SIZE` → `503 QUEUE_FULL` with `Retry-After`. |
 | Shutdown | Worker on `SIGTERM` stops claiming jobs and finishes the current one within `stop_grace_period`; if killed, the sweeper re-queues it. API closes SSE streams; clients reconnect and get a replay. |
 | Redis restart | AOF persistence enabled. |
@@ -178,7 +183,9 @@ queued ──▶ processing ──▶ completed
 | `failed` | `{error}`; stream closes |
 
 On connect the server first replays the current state and all segments produced so far, so a late
-or reconnecting client never misses data. Internally the SSE endpoint reads the job state from
+or reconnecting client never misses data. A terminal `status` is always sent after the final
+segments, so it is the last event before `completed`/`failed`. If a job is re-queued after a lost
+worker, clients receive `status: queued` and the segments start over. Internally the SSE endpoint reads the job state from
 Redis on a short interval and emits deltas — no pub/sub is required.
 
 ### Errors
@@ -264,3 +271,4 @@ tests with coverage, and E2E.
 | D11 | Retry only infrastructure failures | Retry everything | Deterministic failures would fail again and waste worker time. |
 | D12 | One image, two commands | Separate API / worker images | Simpler build; slim API image noted as future work. |
 | D13 | fakeredis in tests | testcontainers | Tests run without Docker; E2E covers real Redis. |
+| D14 | Cancellation through the job status | A separate cancel-flag key | The segment write already checks the status atomically, so a status change stops the worker with no extra key, no extra read, and immediate visibility to clients. |
