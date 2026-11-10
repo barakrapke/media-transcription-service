@@ -10,6 +10,8 @@ services:
     image: media-transcription-service:cuda
     environment:
       DEVICE: cuda
+      # CTranslate2 loads cuBLAS/cuDNN from the pip wheels installed by WITH_CUDA.
+      LD_LIBRARY_PATH: /app/.venv/lib/python3.12/site-packages/nvidia/cublas/lib:/app/.venv/lib/python3.12/site-packages/nvidia/cudnn/lib
       MODEL_NAME: ${MODEL_NAME:-Systran/faster-whisper-large-v3}
     deploy:
       resources:

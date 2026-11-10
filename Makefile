@@ -46,8 +46,10 @@ test: ## Unit + integration tests with coverage (needs ffmpeg)
 	uv run pytest --cov --cov-report=term --cov-fail-under=80
 
 test-docker: ## Unit + integration tests inside Docker (no local ffmpeg/Python needed)
-	docker build --target dev -t media-transcription-service:dev .
-	docker run --rm media-transcription-service:dev pytest --cov --cov-fail-under=80 -p no:cacheprovider
+	docker run --rm -v "$(CURDIR)":/src:ro -w /src -e UV_PROJECT_ENVIRONMENT=/tmp/venv \
+	  -e UV_CACHE_DIR=/tmp/uv-cache -e UV_LINK_MODE=copy -e COVERAGE_FILE=/tmp/.coverage ghcr.io/astral-sh/uv:0.6.14-python3.12-bookworm-slim \
+	  sh -c 'apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg >/dev/null \
+	    && uv sync --frozen && uv run --no-sync pytest --cov --cov-fail-under=80 -p no:cacheprovider' 
 
 e2e: ## End-to-end tests against a dedicated stack using the tiny model
 	API_PORT=$(E2E_PORT) MODEL_NAME=$(E2E_MODEL) docker compose -p $(E2E_PROJECT) up --build -d --wait
