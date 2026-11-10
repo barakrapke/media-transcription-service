@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint & type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check src tests
+      - run: uv run ruff format --check src tests
+      - run: uv run mypy
+
+  test:
+    name: Unit & integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run pytest --cov --cov-report=term --cov-fail-under=80
+
+  e2e:
+    name: End-to-end (Docker Compose, tiny model)
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    env:
+      API_PORT: "8000"
+      MODEL_NAME: Systran/faster-whisper-tiny
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Start stack
+        run: docker compose up --build -d --wait --wait-timeout 900
+      - name: Run end-to-end tests
+        run: uv run pytest -m e2e -v
+        env:
+          E2E_BASE_URL: http://localhost:8000
+      - name: Service logs
+        if: failure()
+        run: docker compose logs --tail 200
+      - name: Stop stack
+        if: always()
+        run: docker compose down -v
