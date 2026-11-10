@@ -23,7 +23,8 @@ The design and the reasoning behind every decision are in **[docs/ARCHITECTURE.m
 
 ## Quickstart
 
-Requirements: Docker with Compose v2. Nothing else is needed on the host.
+Requirements: Docker with Compose v2, with at least 4 GB of memory available to Docker. Nothing
+else is needed on the host.
 
 ```sh
 git clone https://github.com/barakrapke/media-transcription-service.git
@@ -248,6 +249,11 @@ docs/              ARCHITECTURE.md (design + decision record)
   media back (it is deleted as soon as the job finishes), so after a refresh or from a shared link
   the UI says so and lets the user pick the file again to play it locally. Nothing is re-uploaded.
 - Progress is estimated from the position of the latest segment, so it advances in steps.
+- Memory: a worker uses ~1 GB with the `small` model, and peaks briefly while preparing the audio
+  (measured ~2 GB for a 30-minute file, which transcribed in 4 min 40 s on a laptop CPU).
+- Whisper always picks *some* language. Speech in a language it doesn't know is transcribed as the
+  closest one it knows, with a low `language_probability`. Below 50 % the UI warns and suggests
+  selecting the language manually.
 
 ### Out of scope / future work
 

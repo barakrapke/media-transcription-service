@@ -36,6 +36,9 @@ const state = {
   activeWord: null, // currently highlighted word <span>
 };
 
+// Below this detection confidence the UI suggests selecting the language manually.
+const LOW_LANGUAGE_CONFIDENCE = 0.5;
+
 // ---- Helpers -------------------------------------------------------------------------------------
 
 function formatTime(seconds) {
@@ -233,6 +236,7 @@ function resetJobView() {
   show($("player-missing"), false);
   $("reattach-input").value = "";
   show($("result-bar"), false);
+  show($("language-warning"), false);
   show($("job-error"), false);
   show($("transcript-empty"), false);
   show($("job-progress"), true);
@@ -376,7 +380,12 @@ function finish(job) {
 
   const speed = result.processing_time > 0 ? result.duration / result.processing_time : 0;
   const meta = [
-    ["Language", `${languageName(result.language)}${job.language ? "" : " (detected)"}`],
+    [
+      "Language",
+      job.language
+        ? languageName(result.language)
+        : `${languageName(result.language)} (detected, ${Math.round(result.language_probability * 100)}%)`,
+    ],
     ["Duration", formatTime(result.duration)],
     ["Processed in", `${result.processing_time.toFixed(1)} s${speed ? ` (${speed.toFixed(1)}× real time)` : ""}`],
     ["Model", result.model],
@@ -395,6 +404,15 @@ function finish(job) {
   for (const fmt of ["txt", "srt", "vtt"]) $(`dl-${fmt}`).href = `${API}/${job.id}?format=${fmt}`;
   $("copy-btn").onclick = () => copyText(result.text);
   $("footer-model").textContent = result.model;
+
+  const uncertain = !job.language && result.language_probability < LOW_LANGUAGE_CONFIDENCE;
+  if (uncertain) {
+    $("language-warning").textContent =
+      `Low confidence in the detected language (${languageName(result.language)}, ` +
+      `${Math.round(result.language_probability * 100)}%). If it is wrong, start a new ` +
+      "transcription and select the language manually.";
+  }
+  show($("language-warning"), uncertain);
   show($("result-bar"), true);
 }
 

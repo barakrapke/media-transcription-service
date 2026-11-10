@@ -285,6 +285,14 @@ h2 { font-size: 18px; }
 .word { border-radius: 3px; }
 .word.active { background: color-mix(in srgb, var(--accent) 30%, transparent); }
 .empty { margin-top: 20px; text-align: center; }
+.notice {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 13px;
+}
 
 @keyframes fade-in { from { opacity: 0; transform: translateY(2px); } }
 
