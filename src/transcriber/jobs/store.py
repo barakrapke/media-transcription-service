@@ -89,6 +89,16 @@ end
 return 1
 """
 
+# KEYS: job, heartbeat.  ARGV: now, heartbeat_ttl_ms.
+# Marks a just-claimed job as owned. A job deleted while queued is left alone (no stray hash).
+_MARK_CLAIMED = """
+redis.call('SET', KEYS[2], '1', 'PX', tonumber(ARGV[2]))
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  redis.call('HSET', KEYS[1], 'claimed_at', ARGV[1])
+end
+return 1
+"""
+
 # KEYS: job, segments.  ARGV: segment_json, progress.
 # Appends only while the job is still processing; returns 0 once it was cancelled/recovered,
 # which tells the worker to stop.
@@ -188,6 +198,7 @@ class JobStore:
         self._create_script = redis.register_script(_CREATE_AND_ENQUEUE)
         self._transition_script = redis.register_script(_TRANSITION)
         self._append_script = redis.register_script(_APPEND_SEGMENT)
+        self._mark_claimed_script = redis.register_script(_MARK_CLAIMED)
         self._recover_script = redis.register_script(_RECOVER)
 
     @property
@@ -214,7 +225,7 @@ class JobStore:
 
     async def get(self, job_id: str) -> Job | None:
         raw = await cast(Awaitable[dict[str, str]], self._redis.hgetall(job_key(job_id)))
-        return _parse_job(raw) if raw else None
+        return _parse_job(raw) if raw.get("status") else None
 
     async def get_segments(self, job_id: str, start: int = 0) -> list[Segment]:
         items = await cast(
@@ -235,10 +246,10 @@ class JobStore:
         )
         if job_id is None:
             return None
-        async with self._redis.pipeline(transaction=True) as pipe:
-            pipe.set(heartbeat_key(job_id), "1", px=int(heartbeat_ttl * 1000))
-            pipe.hset(job_key(job_id), "claimed_at", str(time.time()))
-            await pipe.execute()
+        await self._mark_claimed_script(
+            keys=[job_key(job_id), heartbeat_key(job_id)],
+            args=[time.time(), int(heartbeat_ttl * 1000)],
+        )
         return job_id
 
     async def ack(self, job_id: str) -> None:
